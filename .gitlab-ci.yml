@@ -1,0 +1,73 @@
+stages:
+  - build
+  - push
+  - deploy
+
+variables:
+  AWS_REGION: eu-north-1
+  AWS_ACCOUNT_ID: "160885294916"
+  ECR_REGISTRY: "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
+  BACKEND_IMAGE: "$ECR_REGISTRY/backend"
+  FRONTEND_IMAGE: "$ECR_REGISTRY/frontend"
+  IMAGE_TAG: "$CI_COMMIT_SHORT_SHA"
+
+before_script:
+  - aws --version
+  - docker --version
+  - aws ecr get-login-password --region $AWS_REGION |
+    docker login --username AWS --password-stdin $ECR_REGISTRY
+
+# -----------------------
+# Build Backend Image
+# -----------------------
+build_backend:
+  stage: build
+  script:
+    - echo "Building backend image"
+    - docker build -t $BACKEND_IMAGE:$IMAGE_TAG ./backend
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+# -----------------------
+# Build Frontend Image
+# -----------------------
+build_frontend:
+  stage: build
+  script:
+    - echo "Building frontend image"
+    - docker build -t $FRONTEND_IMAGE:$IMAGE_TAG ./frontend
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+# -----------------------
+# Push Images to ECR
+# -----------------------
+push_images:
+  stage: push
+  script:
+    - echo "Pushing images to ECR"
+    - docker push $BACKEND_IMAGE:$IMAGE_TAG
+    - docker push $FRONTEND_IMAGE:$IMAGE_TAG
+  needs:
+    - build_backend
+    - build_frontend
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+# -----------------------
+# Deploy to Kubernetes
+# -----------------------
+deploy_to_k8s:
+  stage: deploy
+  script:
+    - echo "Deploying to Kubernetes"
+    - sed -i "s|IMAGE_BACKEND|$BACKEND_IMAGE:$IMAGE_TAG|g" k8s/backend/deployment.yaml
+    - sed -i "s|IMAGE_FRONTEND|$FRONTEND_IMAGE:$IMAGE_TAG|g" k8s/frontend/deployment.yaml
+    - kubectl apply -f k8s/mongodb/
+    - kubectl apply -f k8s/backend/
+    - kubectl apply -f k8s/frontend/
+    - kubectl apply -f k8s/ingress/
+    - kubectl apply -f k8s/hpa/
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
